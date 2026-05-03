@@ -19,7 +19,7 @@ _llm = ChatOllama(
 
 def _safe_json_parse(raw: str) -> dict | None:
     """
-    Parse JSON from phi3:mini output which may include markdown fences.
+    Parse JSON from LLM output which may include markdown fences.
 
     Args:
         raw: Raw LLM response string.
@@ -56,7 +56,7 @@ class ClassifySentimentTool(BaseTool):
     name: str = "classify_sentiment"
     description: str = (
         "Classifies financial news text as BULLISH, BEARISH, or NEUTRAL for a given ticker. "
-        "Uses the local phi3:mini LLM. Returns JSON with label, confidence (0.0–1.0), and reason."
+        "Uses the local LLM. Returns JSON with label, confidence (0.0–1.0), and reason."
     )
     args_schema: Type[BaseModel] = ClassifySentimentInput
 
@@ -74,10 +74,9 @@ class ClassifySentimentTool(BaseTool):
         """
         log_tool_call(AGENT, self.name, {"ticker": ticker, "text_len": len(text)})
 
-        # Keep prompt minimal for phi3:mini — it struggles with long prompts
         prompt = (
             f"Classify this financial news about {ticker} stock.\n"
-            f"Text: {text[:400]}\n\n"
+            f"Text: {text[:600]}\n\n"
             "Choose one: BULLISH (positive for stock price), BEARISH (negative), NEUTRAL (irrelevant).\n"
             'Respond ONLY with valid JSON:\n{"label": "BULLISH", "confidence": 0.9, "reason": "one sentence"}\n'
             "No other text. No explanation."
@@ -137,7 +136,7 @@ class ExtractFinancialEntitiesTool(BaseTool):
         log_tool_call(AGENT, self.name, {"text_len": len(text)})
 
         prompt = (
-            f"Extract financial entities from this text:\n{text[:300]}\n\n"
+            f"Extract financial entities from this text:\n{text[:500]}\n\n"
             "Find: company names, executive names, financial events, economic figures.\n"
             'Respond ONLY with valid JSON: {"entities": ["name1", "name2"]}\n'
             "No other text."

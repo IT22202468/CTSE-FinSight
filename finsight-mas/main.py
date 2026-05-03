@@ -10,7 +10,7 @@ console = Console()
 if __name__ == "__main__":
     console.print(Panel.fit(
         "[bold green]FinSight MAS — Financial News Intelligence System[/bold green]\n"
-        "[dim]CrewAI + phi3:mini (Ollama) | Zero cloud costs | Zero paid APIs[/dim]",
+        "[dim]CrewAI + llama3.2:3b (Ollama) | Zero cloud costs | Zero paid APIs[/dim]",
         border_style="green"
     ))
 

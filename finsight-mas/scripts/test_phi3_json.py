@@ -1,9 +1,9 @@
-# scripts/test_phi3_json.py
+# scripts/test_llm_json.py
 from langchain_ollama import ChatOllama
 import json
 
 llm = ChatOllama(
-    model="phi3:mini",
+    model="llama3.2:3b",
     base_url="http://localhost:11434",
     temperature=0.0,
 )
@@ -18,7 +18,7 @@ response = llm.invoke(prompt)
 print("Raw response:", response.content)
 
 try:
-    # phi3:mini sometimes wraps JSON in markdown — strip it
+    # LLMs sometimes wrap JSON in markdown — strip it
     clean = response.content.strip().replace("```json", "").replace("```", "").strip()
     data = json.loads(clean)
     print("Parsed successfully:", data)

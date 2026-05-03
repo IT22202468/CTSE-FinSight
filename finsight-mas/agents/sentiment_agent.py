@@ -1,10 +1,7 @@
 # agents/sentiment_agent.py
 from crewai import Agent, Task
-from langchain_ollama import ChatOllama
 from tools.sentiment_tools import ClassifySentimentTool, ExtractFinancialEntitiesTool
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL, LLM_TEMPERATURE, LLM_MAX_ITER, LLM_MAX_RETRY
-
-_llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=LLM_TEMPERATURE)
+from config import OLLAMA_MODEL, LLM_MAX_ITER, LLM_MAX_RETRY
 
 sentiment_agent = Agent(
     role="Financial Sentiment Analyst",
@@ -15,7 +12,7 @@ sentiment_agent = Agent(
         "You never guess — ambiguous articles are NEUTRAL."
     ),
     tools=[ClassifySentimentTool(), ExtractFinancialEntitiesTool()],
-    llm=_llm,
+    llm=f"ollama/{OLLAMA_MODEL}",
     verbose=True,
     allow_delegation=False,
     max_iter=LLM_MAX_ITER,

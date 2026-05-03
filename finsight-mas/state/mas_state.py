@@ -16,7 +16,7 @@ class Article(BaseModel):
 
 
 class SentimentResult(BaseModel):
-    """phi3:mini sentiment classification for one article."""
+    """LLM sentiment classification for one article."""
     article_id: str
     ticker: str
     label: str                        # "BULLISH" | "BEARISH" | "NEUTRAL"

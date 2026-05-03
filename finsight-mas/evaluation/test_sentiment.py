@@ -46,7 +46,7 @@ def test_confidence_never_exceeds_1():
 def test_obvious_bearish_classified_bearish():
     """
     LLM-as-a-Judge: Unambiguously negative article should return BEARISH.
-    phi3:mini must score confidence >= 0.65 on obvious cases.
+    llama3.2:3b must score confidence >= 0.65 on obvious cases.
     """
     text = "Tesla stock crashes 25% after massive recall and CEO resignation announcement."
     result = json.loads(sentiment_tool._run(text=text, ticker="TSLA"))

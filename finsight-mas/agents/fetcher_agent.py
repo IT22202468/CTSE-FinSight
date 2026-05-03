@@ -1,14 +1,7 @@
 # agents/fetcher_agent.py
 from crewai import Agent, Task
-from langchain_ollama import ChatOllama
 from tools.news_tools import FetchRSSFeedTool, FilterByTickersTool
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL, LLM_TEMPERATURE, LLM_MAX_ITER, LLM_MAX_RETRY, RSS_FEEDS
-
-_llm = ChatOllama(
-    model=OLLAMA_MODEL,
-    base_url=OLLAMA_BASE_URL,
-    temperature=LLM_TEMPERATURE,
-)
+from config import OLLAMA_MODEL, LLM_MAX_ITER, LLM_MAX_RETRY, RSS_FEEDS
 
 fetcher_agent = Agent(
     role="Financial News Aggregator",
@@ -21,7 +14,7 @@ fetcher_agent = Agent(
         "You are precise about deduplication and always tag which tickers each article mentions."
     ),
     tools=[FetchRSSFeedTool(), FilterByTickersTool()],
-    llm=_llm,
+    llm=f"ollama/{OLLAMA_MODEL}",
     verbose=True,
     allow_delegation=False,
     max_iter=LLM_MAX_ITER,

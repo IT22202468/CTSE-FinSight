@@ -19,7 +19,7 @@ check("Python version", lambda: sys.version.split()[0])
 check("crewai import", lambda: __import__("crewai") and "OK")
 check("yfinance AAPL price", lambda: f"${__import__('yfinance').Ticker('AAPL').fast_info.last_price:.2f}")
 check("feedparser", lambda: f"{len(__import__('feedparser').parse('https://finance.yahoo.com/rss/topstories').entries)} articles from Yahoo")
-check("Ollama/phi3:mini", lambda: __import__('langchain_ollama').ChatOllama(model='phi3:mini').invoke('Reply OK').content.strip())
+check("Ollama/llama3.2:3b", lambda: __import__('langchain_ollama').ChatOllama(model='llama3.2:3b').invoke('Reply OK').content.strip())
 check("SQLite", lambda: __import__('sqlalchemy').create_engine('sqlite:///test.db') and "OK")
 
 print("\nAll systems go. You are ready to build.\n")

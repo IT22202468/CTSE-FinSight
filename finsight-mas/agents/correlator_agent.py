@@ -1,10 +1,7 @@
 # agents/correlator_agent.py
 from crewai import Agent, Task
-from langchain_ollama import ChatOllama
 from tools.market_tools import FetchStockDataTool, ComputeRiskSignalTool
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL, LLM_TEMPERATURE, LLM_MAX_ITER, LLM_MAX_RETRY
-
-_llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=LLM_TEMPERATURE)
+from config import OLLAMA_MODEL, LLM_MAX_ITER, LLM_MAX_RETRY
 
 correlator_agent = Agent(
     role="Quantitative Market Analyst",
@@ -15,7 +12,7 @@ correlator_agent = Agent(
         "with sentiment scores to output a single risk signal."
     ),
     tools=[FetchStockDataTool(), ComputeRiskSignalTool()],
-    llm=_llm,
+    llm=f"ollama/{OLLAMA_MODEL}",
     verbose=True,
     allow_delegation=False,
     max_iter=LLM_MAX_ITER,
