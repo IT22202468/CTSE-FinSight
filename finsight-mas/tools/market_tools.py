@@ -7,30 +7,12 @@ import yfinance as yf
 import numpy as np
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field, field_validator, model_validator
+from tenacity import RetryError
 from config.logger import log_tool_call, log_tool_result, log_error
+from tools.retry_utils import network_retry
+from tools.input_guards import unwrap_json_envelope
 
 AGENT = "MarketCorrelatorAgent"
-
-
-# ─── Tool 1: Fetch Stock Data ─────────────────────────────────────────────
-
-def _unwrap_json_envelope(values: dict) -> dict:
-    """
-    Detect and unwrap the LLM anti-pattern of packing all args into a single
-    JSON-string value under an arbitrary key, e.g. {'yahoo': '{"ticker":"NVDA"}'}.
-    If the dict has exactly one key whose value is a JSON object string, return
-    the parsed inner dict instead.
-    """
-    if len(values) == 1:
-        only_value = next(iter(values.values()))
-        if isinstance(only_value, str):
-            try:
-                inner = json.loads(only_value)
-                if isinstance(inner, dict):
-                    return inner
-            except (json.JSONDecodeError, ValueError):
-                pass
-    return values
 
 
 class FetchStockDataInput(BaseModel):
@@ -41,7 +23,7 @@ class FetchStockDataInput(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def unwrap_json_envelope(cls, values):
-        return _unwrap_json_envelope(values)
+        return unwrap_json_envelope(values)
 
     @field_validator("ticker", mode="before")
     @classmethod
@@ -61,36 +43,30 @@ class FetchStockDataTool(BaseTool):
     )
     args_schema: Type[BaseModel] = FetchStockDataInput
 
+    @staticmethod
+    @network_retry
+    def _fetch_history(ticker: str, period: str):
+        t = yf.Ticker(ticker.upper())
+        hist = t.history(period=period)
+        if hist.empty:
+            raise ValueError(f"Empty history returned for {ticker}")
+        return hist
+
     def _run(self, ticker: str, period: str = "14d") -> str:
-        """
-        Fetch historical price data for a stock ticker.
-
-        Args:
-            ticker: Stock ticker symbol (uppercase).
-            period: yfinance period string — '7d', '14d', '1mo'.
-
-        Returns:
-            JSON string with price data dict, or {"error": "..."} on failure.
-        """
         log_tool_call(AGENT, self.name, {"ticker": ticker, "period": period})
         try:
-            t = yf.Ticker(ticker.upper())
-            hist = t.history(period=period)
-
-            if hist.empty:
-                err = f"No price data for {ticker}"
+            try:
+                hist = self._fetch_history(ticker, period)
+            except (RetryError, Exception) as e:
+                err = f"Failed to fetch {ticker} after retries: {e}"
                 log_error(AGENT, err)
-                return json.dumps({"error": err})
+                return json.dumps({"error": err, "ticker": ticker.upper(),
+                                   "prices": [], "momentum_7d": 0.0, "current_price": 0.0})
 
             closes = hist["Close"].tolist()
             dates  = hist.index.strftime("%Y-%m-%d").tolist()
 
-            # 7-day momentum
-            if len(closes) >= 7:
-                momentum_7d = ((closes[-1] - closes[-7]) / closes[-7]) * 100
-            else:
-                momentum_7d = 0.0
-
+            momentum_7d = ((closes[-1] - closes[-7]) / closes[-7]) * 100 if len(closes) >= 7 else 0.0
             current_price = closes[-1]
 
             result = {
@@ -104,9 +80,10 @@ class FetchStockDataTool(BaseTool):
             return json.dumps(result)
 
         except Exception as e:
-            err = f"Failed to fetch {ticker}: {str(e)}"
+            err = f"Unexpected error fetching {ticker}: {e}"
             log_error(AGENT, err)
-            return json.dumps({"error": err})
+            return json.dumps({"error": err, "ticker": ticker.upper(),
+                               "prices": [], "momentum_7d": 0.0, "current_price": 0.0})
 
 
 # ─── Tool 2: Compute Risk Signal ──────────────────────────────────────────
@@ -135,16 +112,18 @@ class ComputeRiskSignalInput(BaseModel):
     """Input schema for ComputeRiskSignalTool."""
     ticker: str = Field(..., description="Ticker symbol.")
     sentiment_scores: list[float] = Field(..., description="List of bearish sentiment weights (0.0–1.0) from articles.")
-    sentiment_confidences: list[float] = Field(..., description="Confidence weights for each sentiment score.")
-    prices: list[float] = Field(..., description="List of closing prices for volatility calculation.")
-    momentum_7d: float = Field(..., description="7-day price momentum as percentage (e.g. -5.3).")
-    articles_analysed: int = Field(..., description="Number of articles used.")
-    current_price: float = Field(default=0.0, description="Current stock price.")
+    articles_analysed: int = Field(default=0, description="Number of articles used.")
+    # Price fields — required for full accuracy but default to neutral if omitted
+    prices: list[float] = Field(default_factory=list, description="List of closing prices from fetch_stock_data.")
+    momentum_7d: float = Field(default=0.0, description="7-day price momentum % from fetch_stock_data.")
+    current_price: float = Field(default=0.0, description="Current stock price from fetch_stock_data.")
+    # Confidence weights — default to equal weighting if omitted
+    sentiment_confidences: list[float] = Field(default_factory=list, description="Confidence weights for each sentiment score.")
 
     @model_validator(mode="before")
     @classmethod
     def unwrap_json_envelope(cls, values):
-        return _unwrap_json_envelope(values)
+        return unwrap_json_envelope(values)
 
     @field_validator("sentiment_scores", "sentiment_confidences", "prices", mode="before")
     @classmethod

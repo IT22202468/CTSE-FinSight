@@ -5,7 +5,7 @@ from datetime import datetime
 
 
 class Article(BaseModel):
-    """A single news article fetched from an RSS source."""
+    """A single news article fetched from a market news source."""
     id: str                           # SHA256(url)[:12] — dedup key
     title: str
     summary: str

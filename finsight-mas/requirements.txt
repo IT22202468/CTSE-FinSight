@@ -4,7 +4,6 @@ crewai-tools==1.14.4
 langchain-ollama==1.1.0
 langchain-community==0.4.1
 yfinance
-feedparser
 httpx
 pandas
 numpy

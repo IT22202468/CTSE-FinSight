@@ -1,7 +1,7 @@
 # agents/briefing_agent.py
 from crewai import Agent, Task
 from tools.report_tools import InsertDBRecordTool, GenerateHTMLReportTool
-from config import OLLAMA_MODEL, LLM_MAX_ITER, LLM_MAX_RETRY
+from config import OLLAMA_MODEL, LLM_MAX_ITER_BRIEFING, LLM_MAX_RETRY
 
 briefing_agent = Agent(
     role="Chief Risk Intelligence Officer",
@@ -14,7 +14,7 @@ briefing_agent = Agent(
     llm=f"ollama/{OLLAMA_MODEL}",
     verbose=True,
     allow_delegation=False,
-    max_iter=LLM_MAX_ITER,
+    max_iter=LLM_MAX_ITER_BRIEFING,
     max_retry_limit=LLM_MAX_RETRY,
 )
 

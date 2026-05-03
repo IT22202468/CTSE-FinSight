@@ -10,24 +10,11 @@ from rich.console import Console
 from rich.table import Table
 from config import DB_PATH, OUTPUT_DIR
 from config.logger import log_tool_call, log_tool_result, log_error
+from tools.input_guards import unwrap_json_envelope
 
 AGENT   = "BriefingAlertAgent"
 console = Console()
 OUTPUT_DIR.mkdir(exist_ok=True)
-
-
-def _unwrap_json_envelope(values: dict) -> dict:
-    """Unwrap the LLM anti-pattern of packing all args as a JSON string under one key."""
-    if len(values) == 1:
-        only_value = next(iter(values.values()))
-        if isinstance(only_value, str):
-            try:
-                inner = json.loads(only_value)
-                if isinstance(inner, dict):
-                    return inner
-            except (json.JSONDecodeError, ValueError):
-                pass
-    return values
 
 
 # ─── Tool 1: Insert DB Record ─────────────────────────────────────────────
@@ -40,7 +27,7 @@ class InsertDBRecordInput(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def unwrap_json_envelope(cls, values):
-        return _unwrap_json_envelope(values)
+        return unwrap_json_envelope(values)
 
     @field_validator("signal_json", mode="before")
     @classmethod
@@ -139,7 +126,7 @@ class GenerateHTMLReportInput(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def unwrap_json_envelope(cls, values):
-        return _unwrap_json_envelope(values)
+        return unwrap_json_envelope(values)
 
 
 class GenerateHTMLReportTool(BaseTool):

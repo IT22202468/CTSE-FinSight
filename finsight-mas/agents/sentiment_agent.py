@@ -1,7 +1,7 @@
 # agents/sentiment_agent.py
 from crewai import Agent, Task
 from tools.sentiment_tools import ClassifySentimentTool, ExtractFinancialEntitiesTool
-from config import OLLAMA_MODEL, LLM_MAX_ITER, LLM_MAX_RETRY
+from config import OLLAMA_MODEL, LLM_MAX_ITER_SENTIMENT, LLM_MAX_RETRY
 
 sentiment_agent = Agent(
     role="Financial Sentiment Analyst",
@@ -15,7 +15,7 @@ sentiment_agent = Agent(
     llm=f"ollama/{OLLAMA_MODEL}",
     verbose=True,
     allow_delegation=False,
-    max_iter=LLM_MAX_ITER,
+    max_iter=LLM_MAX_ITER_SENTIMENT,
     max_retry_limit=LLM_MAX_RETRY,
 )
 

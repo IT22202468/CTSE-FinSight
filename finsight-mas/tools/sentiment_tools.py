@@ -5,24 +5,16 @@ from typing import Type
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field, field_validator, model_validator
 from langchain_ollama import ChatOllama
+from tenacity import RetryError
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL, LLM_TEMPERATURE
 from config.logger import log_tool_call, log_tool_result, log_error
+from tools.retry_utils import llm_retry
+from tools.input_guards import (
+    unwrap_json_envelope, guard_error,
+    validate_text_field, validate_ticker_field,
+)
 
 AGENT = "SentimentAnalystAgent"
-
-
-def _unwrap_json_envelope(values: dict) -> dict:
-    """Unwrap the LLM anti-pattern of packing all args as a JSON string under one key."""
-    if len(values) == 1:
-        only_value = next(iter(values.values()))
-        if isinstance(only_value, str):
-            try:
-                inner = json.loads(only_value)
-                if isinstance(inner, dict):
-                    return inner
-            except (json.JSONDecodeError, ValueError):
-                pass
-    return values
 
 _llm = ChatOllama(
     model=OLLAMA_MODEL,
@@ -32,15 +24,6 @@ _llm = ChatOllama(
 
 
 def _safe_json_parse(raw: str) -> dict | None:
-    """
-    Parse JSON from LLM output which may include markdown fences.
-
-    Args:
-        raw: Raw LLM response string.
-
-    Returns:
-        Parsed dict on success, None on failure.
-    """
     cleaned = raw.strip()
     cleaned = re.sub(r"```json\s*", "", cleaned)
     cleaned = re.sub(r"```\s*", "", cleaned)
@@ -48,7 +31,6 @@ def _safe_json_parse(raw: str) -> dict | None:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        # Try to extract first JSON object with regex
         match = re.search(r'\{[^}]+\}', cleaned, re.DOTALL)
         if match:
             try:
@@ -62,21 +44,20 @@ def _safe_json_parse(raw: str) -> dict | None:
 
 class ClassifySentimentInput(BaseModel):
     """Input schema for ClassifySentimentTool."""
-    text: str = Field(..., description="The article title and summary to classify.")
-    ticker: str = Field(..., description="The ticker symbol this article relates to, e.g. 'AAPL'.")
+    text: str = Field(default="", description="The article title and summary to classify.")
+    ticker: str = Field(default="", description="The ticker symbol this article relates to, e.g. 'AAPL'.")
 
     @model_validator(mode="before")
     @classmethod
-    def unwrap_json_envelope(cls, values):
-        return _unwrap_json_envelope(values)
+    def unwrap_and_validate(cls, values):
+        return unwrap_json_envelope(values)
 
     @field_validator("ticker", mode="before")
     @classmethod
     def coerce_ticker_string(cls, v):
-        """Accept a single-element list by unwrapping it."""
         if isinstance(v, list):
             if len(v) == 0:
-                raise ValueError("ticker list is empty")
+                return ""
             return str(v[0])
         return v
 
@@ -85,22 +66,26 @@ class ClassifySentimentTool(BaseTool):
     name: str = "classify_sentiment"
     description: str = (
         "Classifies financial news text as BULLISH, BEARISH, or NEUTRAL for a given ticker. "
-        "Uses the local LLM. Returns JSON with label, confidence (0.0–1.0), and reason."
+        "Uses the local LLM. Returns JSON with label, confidence (0.0–1.0), and reason. "
+        "Required: text (plain article string), ticker (plain symbol string e.g. 'AAPL')."
     )
     args_schema: Type[BaseModel] = ClassifySentimentInput
 
-    def _run(self, text: str, ticker: str) -> str:
-        """
-        Classify sentiment of a financial news article.
+    def _run(self, text: str = "", ticker: str = "") -> str:
+        # ── Input guards ──────────────────────────────────────────────────
+        errors = []
+        err = validate_text_field(text)
+        if err:
+            errors.append(err)
+        err = validate_ticker_field(ticker)
+        if err:
+            errors.append(err)
+        if errors:
+            msg = guard_error(errors)
+            log_error(AGENT, f"classify_sentiment called with bad args: {errors}")
+            return msg
 
-        Args:
-            text: Article title and summary text (max 400 chars recommended for phi3:mini).
-            ticker: Ticker symbol to frame the classification context.
-
-        Returns:
-            JSON string: {"label": str, "confidence": float, "reason": str}
-            or {"label": "NEUTRAL", "confidence": 0.5, "reason": "parse_error", "error": str}
-        """
+        ticker = ticker.strip().upper()
         log_tool_call(AGENT, self.name, {"ticker": ticker, "text_len": len(text)})
 
         prompt = (
@@ -111,22 +96,29 @@ class ClassifySentimentTool(BaseTool):
             "No other text. No explanation."
         )
 
+        @llm_retry
+        def _invoke_llm():
+            resp = _llm.invoke(prompt)
+            content = getattr(resp, "content", None) or ""
+            if not content.strip():
+                raise ValueError("LLM returned empty response")
+            return content
+
         try:
-            response = _llm.invoke(prompt)
-            raw_content = getattr(response, "content", None) or ""
-            if not raw_content.strip():
-                log_error(AGENT, f"LLM returned empty response for ticker {ticker}")
+            try:
+                raw_content = _invoke_llm()
+            except (RetryError, Exception) as e:
+                err = f"LLM call failed for ticker {ticker} after retries: {e}"
+                log_error(AGENT, err)
                 return json.dumps({"label": "NEUTRAL", "confidence": 0.5,
-                                   "reason": "empty_llm_response", "error": "LLM returned empty output"})
+                                   "reason": "llm_unavailable", "error": str(e)})
 
             parsed = _safe_json_parse(raw_content)
-
             if parsed is None:
                 log_error(AGENT, f"JSON parse failed for ticker {ticker}. Raw: {raw_content[:100]}")
                 result = {"label": "NEUTRAL", "confidence": 0.5, "reason": "parse_error",
                           "error": "LLM returned unparseable output"}
             else:
-                # Validate and clamp values
                 label = parsed.get("label", "NEUTRAL").upper()
                 if label not in ("BULLISH", "BEARISH", "NEUTRAL"):
                     label = "NEUTRAL"
@@ -138,7 +130,7 @@ class ClassifySentimentTool(BaseTool):
             return json.dumps(result)
 
         except Exception as e:
-            err = f"Sentiment classification failed: {str(e)}"
+            err = f"Sentiment classification failed: {e}"
             log_error(AGENT, err)
             return json.dumps({"label": "NEUTRAL", "confidence": 0.5, "reason": "exception", "error": err})
 
@@ -147,32 +139,31 @@ class ClassifySentimentTool(BaseTool):
 
 class ExtractEntitiesInput(BaseModel):
     """Input schema for ExtractFinancialEntitiesTool."""
-    text: str = Field(..., description="Article text to extract entities from.")
+    text: str = Field(default="", description="Article text to extract entities from.")
 
     @model_validator(mode="before")
     @classmethod
-    def unwrap_json_envelope(cls, values):
-        return _unwrap_json_envelope(values)
+    def unwrap_and_validate(cls, values):
+        return unwrap_json_envelope(values)
 
 
 class ExtractFinancialEntitiesTool(BaseTool):
     name: str = "extract_financial_entities"
     description: str = (
         "Extracts key financial entities from article text: company names, executives, "
-        "economic events, and figures. Returns JSON list of entity strings."
+        "economic events, and figures. Returns JSON list of entity strings. "
+        "Required: text (plain article string)."
     )
     args_schema: Type[BaseModel] = ExtractEntitiesInput
 
-    def _run(self, text: str) -> str:
-        """
-        Extract financial entities from text using phi3:mini.
+    def _run(self, text: str = "") -> str:
+        # ── Input guard ───────────────────────────────────────────────────
+        err = validate_text_field(text)
+        if err:
+            log_error(AGENT, f"extract_financial_entities called with bad args: {err}")
+            return json.dumps({"entities": [], "error": err,
+                               "hint": "Pass the article title and summary as a plain string."})
 
-        Args:
-            text: Article title + summary text.
-
-        Returns:
-            JSON string: {"entities": ["Apple", "Tim Cook", "Q3 earnings"]} or error dict.
-        """
         log_tool_call(AGENT, self.name, {"text_len": len(text)})
 
         prompt = (
@@ -182,21 +173,32 @@ class ExtractFinancialEntitiesTool(BaseTool):
             "No other text."
         )
 
-        try:
-            response = _llm.invoke(prompt)
-            raw_content = getattr(response, "content", None) or ""
-            parsed = _safe_json_parse(raw_content) if raw_content.strip() else None
+        @llm_retry
+        def _invoke_llm():
+            resp = _llm.invoke(prompt)
+            content = getattr(resp, "content", None) or ""
+            if not content.strip():
+                raise ValueError("LLM returned empty response")
+            return content
 
+        try:
+            try:
+                raw_content = _invoke_llm()
+            except (RetryError, Exception) as e:
+                log_error(AGENT, f"LLM call failed for entity extraction after retries: {e}")
+                return json.dumps({"entities": [], "error": str(e)})
+
+            parsed = _safe_json_parse(raw_content)
             if parsed is None or "entities" not in parsed:
                 result = {"entities": []}
             else:
-                entities = [str(e) for e in parsed["entities"] if e][:10]  # cap at 10
+                entities = [str(e) for e in parsed["entities"] if e][:10]
                 result = {"entities": entities}
 
             log_tool_result(AGENT, self.name, f"Extracted {len(result['entities'])} entities")
             return json.dumps(result)
 
         except Exception as e:
-            err = f"Entity extraction failed: {str(e)}"
+            err = f"Entity extraction failed: {e}"
             log_error(AGENT, err)
             return json.dumps({"entities": [], "error": err})
