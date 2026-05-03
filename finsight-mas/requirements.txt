@@ -1,0 +1,19 @@
+# FinSight MAS requires Python 3.13 or 3.12. CrewAI 1.14.4 is not available on Python 3.14.
+crewai==1.14.4
+crewai-tools==1.14.4
+langchain-ollama==1.1.0
+langchain-community==0.4.1
+yfinance
+feedparser
+httpx
+pandas
+numpy
+sqlalchemy
+jinja2
+loguru
+rich
+pytest
+hypothesis
+pytest-cov
+python-dotenv
+pydantic==2.12.4
