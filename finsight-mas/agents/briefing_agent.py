@@ -22,9 +22,19 @@ briefing_agent = Agent(
 def make_briefing_task(context_task, run_id: str) -> Task:
     return Task(
         description=(
-            f"Take the risk signals from the previous task. Run ID: {run_id}.\n"
-            "For each signal: call insert_db_record to persist it.\n"
-            "Then call generate_html_report with all signals to create the executive briefing.\n"
+            f"Persist risk signals and generate the executive HTML report. Run ID: {run_id}.\n\n"
+            "STEP 1 — For EACH risk signal from the previous task, call insert_db_record with:\n"
+            "  signal_json: the signal serialised as a valid JSON string using double-quote keys.\n"
+            "               Each signal MUST include all these fields:\n"
+            '               {"ticker":"AAPL","sentiment_score":0.6,"price_momentum_7d":-1.2,\n'
+            '                "volatility_14d":0.3,"composite_risk":0.65,"risk_tier":"MEDIUM",\n'
+            '                "articles_analysed":3,"current_price":182.50}\n'
+            "               Use only standard double quotes. No single quotes. No trailing commas.\n"
+            f'  run_id: "{run_id}"\n\n'
+            "STEP 2 — Call generate_html_report with:\n"
+            "  signals_json: ALL signals as a JSON array string, e.g. [{...}, {...}]\n"
+            "                Every signal in the array must include 'risk_tier' — do not omit it.\n"
+            f'  run_id: "{run_id}"\n\n'
             "Return: 'Report saved to <path>. HIGH risk tickers: [list].'"
         ),
         expected_output="Path to generated HTML report and list of HIGH risk tickers.",

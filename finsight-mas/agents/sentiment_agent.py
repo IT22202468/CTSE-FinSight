@@ -23,13 +23,26 @@ sentiment_agent = Agent(
 def make_sentiment_task(context_task) -> Task:
     return Task(
         description=(
-            "Load the fetched articles from the previous task output.\n"
-            "For each article:\n"
-            "  1. Call classify_sentiment with the article text and its primary ticker.\n"
-            "  2. Call extract_financial_entities with the article text.\n"
-            "Return a summary: 'Classified N articles: X BULLISH, Y BEARISH, Z NEUTRAL.'"
+            "Classify the sentiment of each fetched article from the previous task.\n\n"
+            "For each article in the fetched list:\n"
+            "  1. Call classify_sentiment with:\n"
+            "       text: article title + space + summary (plain string)\n"
+            "       ticker: the first entry of tickers_mentioned as a plain string, e.g. 'NVDA'\n"
+            "             (NOT a list like ['NVDA'] — must be a bare string)\n"
+            "  2. Call extract_financial_entities with:\n"
+            "       text: same article title + summary string\n\n"
+            "IMPORTANT RULES:\n"
+            "  - 'ticker' must be a plain string like 'AAPL', never a list.\n"
+            "  - Only process articles that have at least one entry in tickers_mentioned.\n"
+            "  - Use ONLY real tickers from tickers_mentioned — never placeholder names.\n\n"
+            "After processing all articles, return EXACTLY this format (replace counts with real numbers\n"
+            "and replace the ticker list with the actual tickers you processed):\n"
+            "  Classified N articles: B BULLISH, R BEARISH, U NEUTRAL. "
+            "Tickers processed: TICK1, TICK2, TICK3."
         ),
-        expected_output="Summary of sentiment classification counts across all articles.",
+        expected_output=(
+            "Plain-English summary with real counts and the actual ticker symbols that were classified."
+        ),
         agent=sentiment_agent,
         context=[context_task],
     )

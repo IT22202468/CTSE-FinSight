@@ -1,11 +1,12 @@
 # tools/market_tools.py
+import ast
 import json
 import math
 from typing import Type
 import yfinance as yf
 import numpy as np
 from crewai.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from config.logger import log_tool_call, log_tool_result, log_error
 
 AGENT = "MarketCorrelatorAgent"
@@ -13,17 +14,50 @@ AGENT = "MarketCorrelatorAgent"
 
 # ─── Tool 1: Fetch Stock Data ─────────────────────────────────────────────
 
+def _unwrap_json_envelope(values: dict) -> dict:
+    """
+    Detect and unwrap the LLM anti-pattern of packing all args into a single
+    JSON-string value under an arbitrary key, e.g. {'yahoo': '{"ticker":"NVDA"}'}.
+    If the dict has exactly one key whose value is a JSON object string, return
+    the parsed inner dict instead.
+    """
+    if len(values) == 1:
+        only_value = next(iter(values.values()))
+        if isinstance(only_value, str):
+            try:
+                inner = json.loads(only_value)
+                if isinstance(inner, dict):
+                    return inner
+            except (json.JSONDecodeError, ValueError):
+                pass
+    return values
+
+
 class FetchStockDataInput(BaseModel):
     """Input schema for FetchStockDataTool."""
     ticker: str = Field(..., description="The stock ticker symbol, e.g. 'AAPL'.")
     period: str = Field(default="14d", description="Time period: '7d', '14d', '1mo', etc.")
 
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap_json_envelope(cls, values):
+        return _unwrap_json_envelope(values)
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def coerce_ticker_string(cls, v):
+        if isinstance(v, list):
+            if len(v) == 0:
+                raise ValueError("ticker list is empty")
+            return str(v[0])
+        return v
+
 
 class FetchStockDataTool(BaseTool):
     name: str = "fetch_stock_data"
     description: str = (
-        "Fetches OHLCV stock price history and current price for a ticker via yfinance (free). "
-        "Returns JSON with: ticker, current_price, prices (list), dates (list), momentum_7d (%)."
+        "Fetches OHLCV stock price history and current price for a ticker. "
+        "Returns JSON with: ticker, current_price, prices (list of floats), dates (list), momentum_7d (float %)."
     )
     args_schema: Type[BaseModel] = FetchStockDataInput
 
@@ -77,6 +111,26 @@ class FetchStockDataTool(BaseTool):
 
 # ─── Tool 2: Compute Risk Signal ──────────────────────────────────────────
 
+def _coerce_float_list(v):
+    """Accept a JSON/Python-repr string in addition to an actual list of floats."""
+    if isinstance(v, list):
+        return [float(x) for x in v]
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, list):
+                return [float(x) for x in parsed]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        try:
+            parsed = ast.literal_eval(v)
+            if isinstance(parsed, list):
+                return [float(x) for x in parsed]
+        except (ValueError, SyntaxError):
+            pass
+    return v
+
+
 class ComputeRiskSignalInput(BaseModel):
     """Input schema for ComputeRiskSignalTool."""
     ticker: str = Field(..., description="Ticker symbol.")
@@ -86,6 +140,16 @@ class ComputeRiskSignalInput(BaseModel):
     momentum_7d: float = Field(..., description="7-day price momentum as percentage (e.g. -5.3).")
     articles_analysed: int = Field(..., description="Number of articles used.")
     current_price: float = Field(default=0.0, description="Current stock price.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap_json_envelope(cls, values):
+        return _unwrap_json_envelope(values)
+
+    @field_validator("sentiment_scores", "sentiment_confidences", "prices", mode="before")
+    @classmethod
+    def coerce_float_list(cls, v):
+        return _coerce_float_list(v)
 
 
 class ComputeRiskSignalTool(BaseTool):

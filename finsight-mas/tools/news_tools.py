@@ -1,14 +1,32 @@
 # tools/news_tools.py
+import ast
 import feedparser
 import hashlib
 import json
 import re
 from typing import Type
 from crewai.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from config.logger import log_tool_call, log_tool_result, log_error
 
 AGENT = "NewsFetcherAgent"
+
+
+def _unwrap_json_envelope(values: dict) -> dict:
+    """
+    Detect and unwrap the LLM anti-pattern of packing all args into a single
+    JSON-string value under an arbitrary key, e.g. {'rss': '{"url":"https://..."}'}.
+    """
+    if len(values) == 1:
+        only_value = next(iter(values.values()))
+        if isinstance(only_value, str):
+            try:
+                inner = json.loads(only_value)
+                if isinstance(inner, dict):
+                    return inner
+            except (json.JSONDecodeError, ValueError):
+                pass
+    return values
 
 
 # ─── Tool 1: Fetch RSS Feed ────────────────────────────────────────────────
@@ -17,6 +35,20 @@ class FetchRSSFeedInput(BaseModel):
     """Input schema for FetchRSSFeedTool."""
     url: str = Field(..., description="The RSS feed URL to fetch articles from.")
     max_articles: int = Field(default=15, description="Maximum articles to return.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap_json_envelope(cls, values):
+        return _unwrap_json_envelope(values)
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def coerce_url_string(cls, v):
+        if isinstance(v, list):
+            if len(v) == 0:
+                raise ValueError("url list is empty")
+            return v[0]
+        return v
 
 
 class FetchRSSFeedTool(BaseTool):
@@ -75,6 +107,32 @@ class FilterByTickersInput(BaseModel):
     """Input schema for FilterByTickersTool."""
     articles_json: str = Field(..., description="JSON string of article list from fetch_rss_feed.")
     tickers: list[str] = Field(..., description="List of ticker symbols to match, e.g. ['AAPL', 'TSLA'].")
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap_json_envelope(cls, values):
+        return _unwrap_json_envelope(values)
+
+    @field_validator("tickers", mode="before")
+    @classmethod
+    def coerce_tickers_list(cls, v):
+        """Accept a JSON array string or Python list-repr in addition to an actual list."""
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+            try:
+                parsed = ast.literal_eval(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except (ValueError, SyntaxError):
+                pass
+        return v
 
 
 class FilterByTickersTool(BaseTool):

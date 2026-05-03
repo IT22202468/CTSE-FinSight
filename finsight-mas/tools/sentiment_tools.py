@@ -3,12 +3,26 @@ import json
 import re
 from typing import Type
 from crewai.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from langchain_ollama import ChatOllama
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL, LLM_TEMPERATURE
 from config.logger import log_tool_call, log_tool_result, log_error
 
 AGENT = "SentimentAnalystAgent"
+
+
+def _unwrap_json_envelope(values: dict) -> dict:
+    """Unwrap the LLM anti-pattern of packing all args as a JSON string under one key."""
+    if len(values) == 1:
+        only_value = next(iter(values.values()))
+        if isinstance(only_value, str):
+            try:
+                inner = json.loads(only_value)
+                if isinstance(inner, dict):
+                    return inner
+            except (json.JSONDecodeError, ValueError):
+                pass
+    return values
 
 _llm = ChatOllama(
     model=OLLAMA_MODEL,
@@ -51,6 +65,21 @@ class ClassifySentimentInput(BaseModel):
     text: str = Field(..., description="The article title and summary to classify.")
     ticker: str = Field(..., description="The ticker symbol this article relates to, e.g. 'AAPL'.")
 
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap_json_envelope(cls, values):
+        return _unwrap_json_envelope(values)
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def coerce_ticker_string(cls, v):
+        """Accept a single-element list by unwrapping it."""
+        if isinstance(v, list):
+            if len(v) == 0:
+                raise ValueError("ticker list is empty")
+            return str(v[0])
+        return v
+
 
 class ClassifySentimentTool(BaseTool):
     name: str = "classify_sentiment"
@@ -84,10 +113,16 @@ class ClassifySentimentTool(BaseTool):
 
         try:
             response = _llm.invoke(prompt)
-            parsed = _safe_json_parse(response.content)
+            raw_content = getattr(response, "content", None) or ""
+            if not raw_content.strip():
+                log_error(AGENT, f"LLM returned empty response for ticker {ticker}")
+                return json.dumps({"label": "NEUTRAL", "confidence": 0.5,
+                                   "reason": "empty_llm_response", "error": "LLM returned empty output"})
+
+            parsed = _safe_json_parse(raw_content)
 
             if parsed is None:
-                log_error(AGENT, f"JSON parse failed for ticker {ticker}. Raw: {response.content[:100]}")
+                log_error(AGENT, f"JSON parse failed for ticker {ticker}. Raw: {raw_content[:100]}")
                 result = {"label": "NEUTRAL", "confidence": 0.5, "reason": "parse_error",
                           "error": "LLM returned unparseable output"}
             else:
@@ -113,6 +148,11 @@ class ClassifySentimentTool(BaseTool):
 class ExtractEntitiesInput(BaseModel):
     """Input schema for ExtractFinancialEntitiesTool."""
     text: str = Field(..., description="Article text to extract entities from.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap_json_envelope(cls, values):
+        return _unwrap_json_envelope(values)
 
 
 class ExtractFinancialEntitiesTool(BaseTool):
@@ -144,7 +184,8 @@ class ExtractFinancialEntitiesTool(BaseTool):
 
         try:
             response = _llm.invoke(prompt)
-            parsed = _safe_json_parse(response.content)
+            raw_content = getattr(response, "content", None) or ""
+            parsed = _safe_json_parse(raw_content) if raw_content.strip() else None
 
             if parsed is None or "entities" not in parsed:
                 result = {"entities": []}

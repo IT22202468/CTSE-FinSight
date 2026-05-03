@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Type
 from crewai.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import create_engine, text
 from rich.console import Console
 from rich.table import Table
@@ -16,12 +16,51 @@ console = Console()
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 
+def _unwrap_json_envelope(values: dict) -> dict:
+    """Unwrap the LLM anti-pattern of packing all args as a JSON string under one key."""
+    if len(values) == 1:
+        only_value = next(iter(values.values()))
+        if isinstance(only_value, str):
+            try:
+                inner = json.loads(only_value)
+                if isinstance(inner, dict):
+                    return inner
+            except (json.JSONDecodeError, ValueError):
+                pass
+    return values
+
+
 # ─── Tool 1: Insert DB Record ─────────────────────────────────────────────
 
 class InsertDBRecordInput(BaseModel):
     """Input schema for InsertDBRecordTool."""
     signal_json: str = Field(..., description="JSON string of a single RiskSignal dict.")
     run_id: str = Field(..., description="The current run identifier (timestamp string).")
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap_json_envelope(cls, values):
+        return _unwrap_json_envelope(values)
+
+    @field_validator("signal_json", mode="before")
+    @classmethod
+    def sanitize_signal_json(cls, v):
+        """Coerce dict input directly; fix common LLM JSON serialization artefacts."""
+        if isinstance(v, dict):
+            return json.dumps(v)
+        if not isinstance(v, str):
+            return json.dumps(v)
+        cleaned = v.strip()
+        # Replace smart/single quotes with double quotes where safe
+        cleaned = cleaned.replace("'", '"')
+        # Strip trailing commas before } or ]
+        import re as _re
+        cleaned = _re.sub(r",\s*([}\]])", r"\1", cleaned)
+        try:
+            json.loads(cleaned)
+            return cleaned
+        except json.JSONDecodeError:
+            return v  # return original and let _run surface the error naturally
 
 
 class InsertDBRecordTool(BaseTool):
@@ -96,6 +135,11 @@ class GenerateHTMLReportInput(BaseModel):
     signals_json: str = Field(..., description="JSON string of list of RiskSignal dicts.")
     run_id: str = Field(..., description="Current run identifier for file naming.")
     alert_threshold: float = Field(default=0.70, description="Score above which tier is HIGH.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap_json_envelope(cls, values):
+        return _unwrap_json_envelope(values)
 
 
 class GenerateHTMLReportTool(BaseTool):
@@ -179,14 +223,14 @@ class GenerateHTMLReportTool(BaseTool):
 
         rows = "".join(f"""
         <tr>
-          <td><b>{s['ticker']}</b></td>
-          <td>{tier_badge(s['risk_tier'])}</td>
-          <td>{s['composite_risk']:.2f}</td>
-          <td>{s['sentiment_score']:.2f}</td>
-          <td style="color:{'red' if s['price_momentum_7d']<0 else 'green'}">{s['price_momentum_7d']:+.1f}%</td>
-          <td>{s['volatility_14d']:.2f}</td>
-          <td>${s['current_price']:.2f}</td>
-          <td>{s['articles_analysed']}</td>
+          <td><b>{s.get('ticker', '')}</b></td>
+          <td>{tier_badge(s.get('risk_tier', 'LOW'))}</td>
+          <td>{s.get('composite_risk', 0.0):.2f}</td>
+          <td>{s.get('sentiment_score', 0.0):.2f}</td>
+          <td style="color:{'red' if s.get('price_momentum_7d', 0) < 0 else 'green'}">{s.get('price_momentum_7d', 0.0):+.1f}%</td>
+          <td>{s.get('volatility_14d', 0.0):.2f}</td>
+          <td>${s.get('current_price', 0.0):.2f}</td>
+          <td>{s.get('articles_analysed', 0)}</td>
         </tr>""" for s in signals)
 
         return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
